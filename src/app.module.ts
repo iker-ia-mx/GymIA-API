@@ -10,6 +10,7 @@ import { WorkoutsModule } from './workouts/workouts.module.js';
 import { EvolutionModule } from './evolution/evolution.module.js';
 import { BodyCompositionModule } from './body-composition/body-composition.module.js';
 import { NutritionModule } from './nutrition/nutrition.module.js';
+import { OnboardingModule } from './onboarding/onboarding.module.js';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { NutritionModule } from './nutrition/nutrition.module.js';
     EvolutionModule,
     BodyCompositionModule,
     NutritionModule,
+    OnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

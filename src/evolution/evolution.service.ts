@@ -10,6 +10,8 @@ type CompletedSet = {
   sessionExercise: {
     exerciseId: string;
     exercise: { name: string };
+    sessionId: string;
+    session: { startedAt: Date };
   };
 };
 
@@ -45,7 +47,9 @@ export class EvolutionService {
         sessionExercise: {
           select: {
             exerciseId: true,
+            sessionId: true,
             exercise: { select: { name: true } },
+            session: { select: { startedAt: true } },
           },
         },
       },
@@ -154,10 +158,52 @@ export class EvolutionService {
           )
         : 0;
 
+    // Historial por sesión real (peso/reps/series realmente registrados). No
+    // incluye RPE — el modelo de datos (SetLog) no lo captura, así que no se
+    // inventa. "isPR" se calcula comparando contra el mejor peso de sesiones
+    // anteriores, con datos reales, no una estimación.
+    const sessionGroups = new Map<
+      string,
+      { startedAt: Date; sets: { weightKg: number; reps: number }[] }
+    >();
+    for (const set of exerciseSets) {
+      const sessionId = set.sessionExercise.sessionId;
+      const group = sessionGroups.get(sessionId);
+      if (group) {
+        group.sets.push({ weightKg: set.weightKg, reps: set.reps });
+      } else {
+        sessionGroups.set(sessionId, {
+          startedAt: set.sessionExercise.session.startedAt,
+          sets: [{ weightKg: set.weightKg, reps: set.reps }],
+        });
+      }
+    }
+
+    let runningBestWeightKg = 0;
+    const sessionHistory = [...sessionGroups.entries()]
+      .sort((a, b) => a[1].startedAt.getTime() - b[1].startedAt.getTime())
+      .map(([sessionId, group]) => {
+        const bestSet = group.sets.reduce((best, set) =>
+          set.weightKg > best.weightKg ? set : best,
+        );
+        const isPR = bestSet.weightKg > runningBestWeightKg;
+        if (isPR) runningBestWeightKg = bestSet.weightKg;
+        return {
+          sessionId,
+          date: group.startedAt.toISOString(),
+          bestSet,
+          totalSets: group.sets.length,
+          isPR,
+        };
+      })
+      .reverse();
+
     return {
       exerciseName: exerciseSets[0]?.sessionExercise.exercise.name ?? null,
       history,
       percentChange,
+      sessionHistory,
+      totalSessions: sessionGroups.size,
     };
   }
 

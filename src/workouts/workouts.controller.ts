@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -39,6 +40,19 @@ export class WorkoutsController {
   @Get('sessions/active')
   getActiveSession(@CurrentUser() user: AuthenticatedUser) {
     return this.workoutsService.getActiveSession(user.id);
+  }
+
+  @Get('sessions')
+  getSessions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.workoutsService.getSessions(
+      user.id,
+      from ? new Date(from) : undefined,
+      to ? new Date(to) : undefined,
+    );
   }
 
   @Get('sessions/:id')
@@ -75,5 +89,10 @@ export class WorkoutsController {
   @Post('sessions/:id/finish')
   finishSession(@CurrentUser() user: AuthenticatedUser, @Param('id') sessionId: string) {
     return this.workoutsService.finishSession(user.id, sessionId);
+  }
+
+  @Post('sessions/:id/abandon')
+  abandonSession(@CurrentUser() user: AuthenticatedUser, @Param('id') sessionId: string) {
+    return this.workoutsService.abandonSession(user.id, sessionId);
   }
 }

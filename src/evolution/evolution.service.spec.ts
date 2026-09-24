@@ -18,6 +18,7 @@ describe('EvolutionService', () => {
     reps: number;
     completedAt: Date;
     exercise?: typeof exerciseA;
+    sessionId?: string;
   }) {
     return {
       weightKg: overrides.weightKg,
@@ -26,6 +27,8 @@ describe('EvolutionService', () => {
       sessionExercise: {
         exerciseId: (overrides.exercise ?? exerciseA).id,
         exercise: overrides.exercise ?? exerciseA,
+        sessionId: overrides.sessionId ?? 'session-1',
+        session: { startedAt: overrides.completedAt },
       },
     };
   }
@@ -158,7 +161,13 @@ describe('EvolutionService', () => {
 
       const result = await service.getExerciseHistory(userId, 'never-trained');
 
-      expect(result).toEqual({ exerciseName: null, history: [], percentChange: 0 });
+      expect(result).toEqual({
+        exerciseName: null,
+        history: [],
+        percentChange: 0,
+        sessionHistory: [],
+        totalSessions: 0,
+      });
     });
 
     it('filtra correctamente por exerciseId, sin mezclar el historial de otro ejercicio', async () => {

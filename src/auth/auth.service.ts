@@ -116,11 +116,17 @@ export class AuthService {
     return rawToken;
   }
 
-  private buildUserResponse(user: { id: string; email: string; createdAt: Date }) {
+  private buildUserResponse(user: {
+    id: string;
+    email: string;
+    createdAt: Date;
+    onboardingCompletedAt: Date | null;
+  }) {
     return {
       id: user.id,
       email: user.email,
       createdAt: user.createdAt,
+      onboardingCompletedAt: user.onboardingCompletedAt,
     };
   }
 }

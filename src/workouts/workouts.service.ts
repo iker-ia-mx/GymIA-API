@@ -26,8 +26,8 @@ export class WorkoutsService {
     return this.prisma.exercise.findMany({ orderBy: { name: 'asc' } });
   }
 
-  getRoutines(userId: string) {
-    return this.prisma.routine.findMany({
+  async getRoutines(userId: string) {
+    const routines = await this.prisma.routine.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -35,7 +35,53 @@ export class WorkoutsService {
           orderBy: { order: 'asc' },
           include: { exercise: true },
         },
+        sessions: {
+          orderBy: { startedAt: 'desc' },
+          take: 1,
+          select: { startedAt: true },
+        },
       },
+    });
+
+    // "lastSessionAt" es un dato real (fecha de la última sesión iniciada con
+    // esta rutina) — no se inventan categorías, insignias de IA ni
+    // porcentajes de "compatibilidad" que no existen en el modelo de datos.
+    return routines.map(({ sessions, ...routine }) => ({
+      ...routine,
+      lastSessionAt: sessions[0]?.startedAt ?? null,
+    }));
+  }
+
+  async getSessions(userId: string, from?: Date, to?: Date) {
+    return this.prisma.workoutSession.findMany({
+      where: {
+        userId,
+        ...(from || to
+          ? {
+              startedAt: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+      orderBy: { startedAt: 'desc' },
+      include: {
+        routine: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async abandonSession(userId: string, sessionId: string) {
+    const session = await this.getSession(userId, sessionId);
+    if (session.status !== 'in_progress') {
+      throw new ConflictException('This session is not in progress');
+    }
+
+    return this.prisma.workoutSession.update({
+      where: { id: sessionId },
+      data: { status: 'abandoned', finishedAt: new Date() },
+      include: sessionInclude,
     });
   }
 

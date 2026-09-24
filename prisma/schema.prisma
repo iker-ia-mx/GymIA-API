@@ -9,19 +9,42 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  password              String
+  createdAt             DateTime  @default(now())
+  onboardingCompletedAt DateTime?
 
-  routines        Routine[]
-  workoutSessions WorkoutSession[]
-  bodyMetrics     BodyMetric[]
-  progressPhotos  ProgressPhoto[]
-  refreshTokens   RefreshToken[]
-  foods           Food[]
-  meals           Meal[]
-  nutritionGoal   NutritionGoal?
+  routines          Routine[]
+  workoutSessions   WorkoutSession[]
+  bodyMetrics       BodyMetric[]
+  progressPhotos    ProgressPhoto[]
+  refreshTokens     RefreshToken[]
+  foods             Food[]
+  meals             Meal[]
+  nutritionGoal     NutritionGoal?
+  onboardingProfile OnboardingProfile?
+}
+
+// Respuestas del cuestionario de onboarding (w02-w05 en Figma). Se usa una
+// sola vez para generar la rutina inicial del usuario (ver
+// WorkoutsService.generateFromOnboarding) — no se vuelve a leer después,
+// pero se conserva para poder regenerar o auditar la decisión.
+model OnboardingProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  goal               String // ganar_musculo | ganar_fuerza | fuerza_musculo
+  experienceLevel    String // principiante | intermedio
+  trainingDays       String[] // subset de ["L","M","X","J","V","S","D"]
+  sessionDurationMin Int
+  location           String // gimnasio_completo | gimnasio_basico | casa | personalizado
+  equipment          String[]
+  musclePriorities   String[]
+  keepExercises      String[]
+  avoidExercises     String[]
+  createdAt          DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model RefreshToken {
