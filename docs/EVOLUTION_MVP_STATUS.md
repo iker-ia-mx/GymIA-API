@@ -82,7 +82,8 @@ Los 4 bugs anteriores fueron corregidos y verificados:
 - **Sin caché ni paginación**: `getCompletedSets` trae *todas* las series completadas del usuario en cada request de cualquiera de los 3 endpoints. Aceptable para el volumen de datos de un MVP, pero escalará mal con usuarios de larga trayectoria (años de historial). No es necesario resolverlo ahora, pero conviene vigilarlo.
 - **`progressScore` es una heurística simple**, no validada con usuarios reales — puede necesitar ajuste de pesos (60/40) una vez haya datos de uso real.
 - **`percentChange` con un solo punto de historial** siempre es `0` (no hay "antes" con qué comparar) — comportamiento esperado, pero vale la pena confirmarlo con el equipo de producto si se espera otro mensaje para ese caso en vez de "0%".
-- **Usuario de prueba de la verificación de regresión** (`evolution-audit-*@example.com`) quedó en la base de datos de Supabase — no se eliminó porque no existe endpoint de borrado de usuario ni se pidió acceso directo a la base de datos en esta sesión. Si se desea limpiar, requiere una acción explícita (borrado directo en Supabase o vía Prisma Studio).
+
+**Resuelto (24/09/2026):** los usuarios de prueba de la verificación de regresión (`evolution-audit-verify@example.com` y `evolution-audit-1790254510@example.com`) fueron identificados, auditados y eliminados de Supabase mediante `prisma.user.delete()` — el borrado se hizo desde la tabla `User` para que el `onDelete: Cascade` de Prisma/Postgres propagara automáticamente a `Routine`, `RoutineExercise`, `WorkoutSession`, `WorkoutSessionExercise` y `SetLog`. Se verificó explícitamente, con consultas posteriores a la eliminación, que **no quedó ningún registro huérfano**: 0 usuarios con email `@example.com`, 0 filas restantes en las 5 tablas dependientes, y 0 `SetLog` huérfanos en toda la base de datos (chequeo global, no solo de estos IDs).
 
 ## Checklist MVP
 
@@ -96,7 +97,7 @@ Los 4 bugs anteriores fueron corregidos y verificados:
 - [x] Responsividad del gráfico (viewBox + preserveAspectRatio)
 - [x] Consistencia visual con Figma
 - [x] Compila sin errores (`npm run build`)
-- [ ] Limpieza del usuario de prueba de la verificación de regresión (pendiente, requiere acción explícita)
+- [x] Limpieza de usuarios de prueba de la verificación de regresión (resuelto 24/09/2026, sin registros huérfanos)
 
 ## Próximos pasos recomendados
 

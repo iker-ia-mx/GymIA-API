@@ -1,7 +1,7 @@
 # GymIA — Estado del Proyecto
 
 **Fecha:** 2026-09-24
-**Estado general:** ambos repos (backend y mobile) están respaldados en GitHub y sincronizados. El riesgo P0 identificado en `docs/NEXT_STEPS.md` (código de `mobile` sin respaldo, existiendo solo en disco local) quedó **mitigado**.
+**Estado general:** ambos repos (backend y mobile) están respaldados en GitHub y sincronizados. El riesgo P0 identificado en `docs/NEXT_STEPS.md` (código de `mobile` sin respaldo, existiendo solo en disco local) quedó **mitigado**. Los datos de prueba residuales del módulo Evolución también fueron limpiados de Supabase — ver Riesgos pendientes.
 
 ---
 
@@ -171,11 +171,12 @@ Todas las entidades propiedad de un usuario tienen relación explícita con `Use
 
 ## Riesgos pendientes
 
-**Mitigado en esta sesión:** el riesgo P0 de `docs/NEXT_STEPS.md` ("código de `mobile` sin respaldo, con riesgo de pérdida irreversible") quedó resuelto — ver sección Repositorios arriba.
+**Mitigado en esta sesión:**
+- El riesgo P0 de `docs/NEXT_STEPS.md` ("código de `mobile` sin respaldo, con riesgo de pérdida irreversible") quedó resuelto — ver sección Repositorios arriba.
+- **Limpieza de datos de auditoría completada (24/09/2026):** los dos usuarios de prueba residuales en Supabase (`evolution-audit-verify@example.com`, `evolution-audit-1790254510@example.com`) fueron eliminados vía `prisma.user.delete()`, aprovechando el `onDelete: Cascade` del esquema. Se verificó tras el borrado que no quedó ningún registro huérfano en `Routine`, `RoutineExercise`, `WorkoutSession`, `WorkoutSessionExercise` ni `SetLog` (chequeo global sobre toda la tabla `SetLog`, no solo los IDs afectados). Detalle completo en `docs/EVOLUTION_MVP_STATUS.md`.
 
 - **`getCompletedSets` sin paginación ni caché**: el módulo Evolución trae todas las series completadas del usuario en cada request. Aceptable para el volumen actual, pero escalará mal con usuarios de largo historial.
 - **`progressScore` es una heurística fija (60% frecuencia / 40% tendencia)**, no validada con datos de uso real — puede necesitar recalibración.
-- **Usuario de prueba residual en Supabase** (`evolution-audit-*@example.com`, creado durante la verificación de regresión de Evolución) — no hay endpoint de borrado de usuario; requiere limpieza manual si se desea.
 - **`WorkoutSession.status`** es un `String` libre (`"in_progress" | "completed" | "abandoned"`) en vez de un enum de Prisma — sin validación a nivel de base de datos contra valores inválidos.
 - **Sin rate limiting** en `/auth/login` ni `/auth/register` — expuesto a fuerza bruta/abuso si el proyecto sale de fase MVP.
 - **CORS abierto sin restricción de origen** (`app.enableCors()` sin configuración) — correcto para desarrollo, debe restringirse antes de producción.
@@ -194,4 +195,5 @@ Todas las entidades propiedad de un usuario tienen relación explícita con `Use
 2. **Rate limiting básico** en `/auth/login` y `/auth/register` (`@nestjs/throttler`) antes de exponer el backend fuera de desarrollo.
 3. **`.env.example`** + documentación de variables de entorno requeridas.
 4. **Decisión de producto sobre Fase 3**: confirmar si se avanza con Nutrición (requiere spike de infraestructura IA/visión) o se prioriza pulir Composición Corporal dentro de Evolución.
-5. **Limpieza de datos de prueba** en Supabase (usuario `evolution-audit-*`) antes de cualquier demo o entrega a stakeholders.
+
+~~5. Limpieza de datos de prueba en Supabase~~ — **completado el 24/09/2026**, ver Riesgos pendientes.
