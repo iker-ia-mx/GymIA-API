@@ -19,6 +19,9 @@ model User {
   bodyMetrics     BodyMetric[]
   progressPhotos  ProgressPhoto[]
   refreshTokens   RefreshToken[]
+  foods           Food[]
+  meals           Meal[]
+  nutritionGoal   NutritionGoal?
 }
 
 model RefreshToken {
@@ -144,4 +147,73 @@ model ProgressPhoto {
 
   @@index([userId])
   @@index([userId, takenAt])
+}
+
+// Catálogo de alimentos propio de cada usuario (no compartido entre usuarios,
+// a diferencia de Exercise). Las macros se definen "por cada servingSizeG
+// gramos" — si servingSizeG es null, se asume el estándar de etiqueta
+// nutricional: por 100g.
+model Food {
+  id           String   @id @default(uuid())
+  userId       String
+  name         String
+  caloriesKcal Float
+  proteinG     Float
+  carbsG       Float
+  fatG         Float
+  servingSizeG Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mealItems MealItem[]
+
+  @@index([userId])
+  @@index([userId, name])
+}
+
+model Meal {
+  id        String   @id @default(uuid())
+  userId    String
+  mealType  String // "desayuno" | "comida" | "cena" | "snack"
+  loggedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items MealItem[]
+
+  @@index([userId])
+  @@index([userId, loggedAt])
+}
+
+model MealItem {
+  id           String @id @default(uuid())
+  mealId       String
+  foodId       String
+  quantityG    Float
+  // Snapshot de macros en el momento de registrar — independiente de que
+  // "Food" se edite después (mismo principio que SetLog en Entrenar).
+  caloriesKcal Float
+  proteinG     Float
+  carbsG       Float
+  fatG         Float
+
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  food Food @relation(fields: [foodId], references: [id], onDelete: Cascade)
+
+  @@index([mealId])
+  @@index([foodId])
+}
+
+model NutritionGoal {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  dailyCaloriesKcal Float
+  proteinG          Float?
+  carbsG            Float?
+  fatG              Float?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
