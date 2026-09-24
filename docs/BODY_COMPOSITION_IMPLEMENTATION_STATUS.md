@@ -1,9 +1,11 @@
-# Composición Corporal — Estado de Implementación (Backend, Fase 1)
+# Composición Corporal — Estado de Implementación
 
 **Fecha:** 2026-09-24
-**Alcance:** solo backend, siguiendo `docs/BODY_COMPOSITION_DESIGN.md`. **Sin cambios en `mobile/`** — según lo pedido.
+**Alcance:** backend (Fase 1) + mobile (Semana 2, Fase 1), siguiendo `docs/BODY_COMPOSITION_DESIGN.md` y `docs/PHASE3_SPIKE.md`.
 
 ---
+
+# Parte A — Backend
 
 ## 1. Diff de Prisma
 
@@ -126,6 +128,8 @@ Tal como se diseñó: el backend **nunca maneja bytes de imagen**. `BodyComposit
 
 **No verificado en vivo** (bloqueado por falta de credenciales, no por un defecto de código): el flujo real de subida/lectura/borrado de fotos contra Supabase Storage. Pendiente para cuando se complete el paso manual de la sección 7.
 
+**Corrección aplicada durante la verificación mobile (Semana 2, ver Parte B):** `getProgressPhotos` construía el cliente de Storage (`getStorageBucket()`) de forma **incondicional**, incluso con 0 fotos — por lo que `GET /progress-photos` devolvía `500` para cualquier usuario sin fotos, en vez de `[]`. Corregido con un `if (photos.length === 0) return [];` antes de tocar Storage. Este bug no fue detectado en el smoke test de esta Parte A porque nunca se probó `GET /progress-photos` en estado vacío — solo se probó `POST /progress-photos/upload-url`, que sí depende de Storage legítimamente. Ver Parte B, sección "Bugs encontrados y corregidos".
+
 ## 7. Pendiente antes de poder usar `/progress-photos/*` en un entorno real
 
 Dos pasos manuales, fuera del alcance de esta tarea (no son cambios de código):
@@ -135,6 +139,97 @@ Dos pasos manuales, fuera del alcance de esta tarea (no son cambios de código):
 
 Hasta que esto se complete, `/body-metrics/*` funciona con normalidad; `/progress-photos/*` devolverá `500` (comportamiento esperado y verificado, no un bug).
 
-## 8. Siguiente paso
+## 8. Siguiente paso (al cierre de la Parte A)
 
-Semana 2 del roadmap de `docs/PHASE3_SPIKE.md`: implementación mobile (activar el shortcut "Cuerpo" en `evolucion/index.tsx`, pantalla de formulario + historial + `LineChart` reutilizado, flujo de subida de fotos) — no iniciada en esta tarea, según lo pedido explícitamente.
+Semana 2 del roadmap de `docs/PHASE3_SPIKE.md`: implementación mobile — completada, ver Parte B.
+
+---
+
+# Parte B — Mobile (Semana 2, Fase 1)
+
+**Alcance:** experiencia móvil para `BodyMetric` y `ProgressPhoto` consumiendo el backend de la Parte A. **Sin cambios en Nutrición, sin IA, sin offline sync** — según lo pedido.
+
+## 1. Pantallas creadas
+
+| Pantalla | Archivo | Ruta |
+|---|---|---|
+| Body Composition Home | `src/app/(app)/evolucion/cuerpo.tsx` | `/evolucion/cuerpo` |
+| Add Body Metric | `src/app/(app)/evolucion/cuerpo-agregar.tsx` | `/evolucion/cuerpo-agregar` |
+| Progress Photos Gallery | `src/app/(app)/evolucion/cuerpo-fotos.tsx` | `/evolucion/cuerpo-fotos` |
+| Add Progress Photo | `src/app/(app)/evolucion/cuerpo-agregar-foto.tsx` | `/evolucion/cuerpo-agregar-foto` |
+
+Rutas planas dentro de `evolucion/` (no en una subcarpeta `cuerpo/`), replicando exactamente el patrón ya usado por `strength.tsx` — consistente con la arquitectura de Expo Router del proyecto.
+
+## 2. Archivos creados
+
+- `src/app/(app)/evolucion/cuerpo.tsx`
+- `src/app/(app)/evolucion/cuerpo-agregar.tsx`
+- `src/app/(app)/evolucion/cuerpo-fotos.tsx`
+- `src/app/(app)/evolucion/cuerpo-agregar-foto.tsx`
+- `src/lib/bodyCompositionApi.ts` — cliente API (8 funciones: `getBodyMetrics`, `getLatestBodyMetric`, `createBodyMetric`, `deleteBodyMetric`, `getProgressPhotos`, `createUploadUrl`, `registerProgressPhoto`, `deleteProgressPhoto`, `uploadPhotoToStorage`)
+
+## 3. Archivos modificados
+
+- `src/app/(app)/evolucion/index.tsx` — activa el shortcut "Cuerpo" (`enabled: true`) y corrige un bug preexistente: todos los shortcuts habilitados navegaban a `/evolucion/strength` sin importar cuál se tocara (el `onPress` estaba hardcodeado). Se añadió un campo `route` por shortcut.
+- `app.json` — añade el plugin `expo-image-picker` con textos de permiso de cámara/galería.
+- `package.json` / `package-lock.json` — nueva dependencia `expo-image-picker@~57.0.20` (instalada con `npx expo install`, versión resuelta automáticamente para el SDK del proyecto).
+
+## 4. Métricas mostradas
+
+Peso, % Grasa Corporal, Masa Muscular, Cintura — las 4 disponibles en el backend, en 4 tarjetas (grid 2×2) en el Home. Cada tarjeta muestra el valor más reciente y, si existe una medición previa con ese mismo campo, un delta (`+`/`-`). El delta **no se colorea como "bueno"/"malo"**: sin conocer el objetivo del usuario (bajar de peso vs. ganar masa), asumir una dirección sería incorrecto — decisión de diseño documentada inline en el código.
+
+## 5. Gráficas
+
+- Reutiliza el componente `LineChart` existente de Evolución **sin modificarlo**.
+- Timeline histórica de peso: un punto por medición, mismo patrón de `useMemo` + etiquetas de fecha corta (`formatWeekLabel`) que `strength.tsx`.
+- Último valor destacado: encabezado de la tarjeta del gráfico ("Peso — 78.4 kg" + "Última medición: Hoy/Ayer/Hace N días").
+
+## 6. Fotos
+
+Flujo de 3 pasos implementado en `cuerpo-agregar-foto.tsx` + `bodyCompositionApi.ts`, exactamente como se diseñó en `BODY_COMPOSITION_DESIGN.md`:
+
+1. `createUploadUrl(token, contentType)` → `POST /progress-photos/upload-url`.
+2. `uploadPhotoToStorage(uploadUrl, fileUri, contentType)` → `fetch(uploadUrl, { method: 'PUT', body: blob })` **directo a Supabase Storage**, sin pasar por la API de GymIA (por eso esta función no usa `apiRequest`).
+3. `registerProgressPhoto(token, storagePath)` → `POST /progress-photos`.
+
+Selector de imagen: `expo-image-picker`, con `requestMediaLibraryPermissionsAsync`/`requestCameraPermissionsAsync` antes de abrir cada picker, y mensaje de error explícito si el permiso está bloqueado (mismo patrón de "acceso bloqueado, actívalo en ajustes" visto en el Figma de Nutrición).
+
+## 7. Estados implementados
+
+| Pantalla | Loading | Empty | Error |
+|---|---|---|---|
+| Home | `ActivityIndicator` mientras carga historial + fotos | Mensaje + CTA si no hay mediciones | Texto de error si falla la carga |
+| Add Metric | Botón con `loading` mientras guarda | — (formulario siempre disponible) | Validación de peso + error de red |
+| Gallery | `ActivityIndicator` | Mensaje si no hay fotos | Texto de error si falla la carga o el borrado |
+| Add Photo | Botón con `loading` mientras sube | Placeholder "Elige una foto..." antes de seleccionar | Error de permiso (cámara/galería) separado del error de subida |
+
+## 8. Arquitectura y reutilización
+
+- Mismo patrón que Auth/Entrenar/Evolución: `useSession()` para el token, `apiRequest` como cliente HTTP base, `useFocusEffect` + `useCallback` para cargar datos al enfocar la pantalla (no `useEffect` crudo, por la regla de ESLint `react-hooks/set-state-in-effect` ya aplicada en el resto del proyecto).
+- Componentes reutilizados sin modificar: `AppBackground`, `Card`, `PrimaryButton`, `TextField`, `LineChart`.
+- `theme/tokens.ts` sin cambios — cero colores/tipografías nuevos, todo tomado del sistema de diseño existente.
+- Cero lógica de IA, cero sincronización offline — tal como se pidió explícitamente.
+
+## 9. Bugs encontrados y corregidos (durante la verificación en navegador)
+
+1. **Bug preexistente en `evolucion/index.tsx`** (no introducido en esta tarea, pero activado por ella): el `onPress` de los shortcuts estaba hardcodeado a `router.push('/evolucion/strength')` para *cualquier* shortcut habilitado. Con solo "Fuerza" habilitado no se notaba; al habilitar "Cuerpo" también, tocarlo habría navegado a la pantalla equivocada. Corregido añadiendo un campo `route` por shortcut.
+2. **Bug real en el backend** (`BodyCompositionService.getProgressPhotos`): construía el cliente de Supabase Storage antes de comprobar si había fotos, causando `500` en `GET /progress-photos` para cualquier usuario sin fotos — es decir, para *todo* usuario nuevo. Encontrado navegando al Home de Composición Corporal con un usuario sin datos (justo el estado vacío que debía funcionar). Corregido con un early-return antes de tocar Storage. Ver Parte A, sección 6.
+3. **Problema de UX en `cuerpo-agregar-foto.tsx`**: el cuadro de vista previa/placeholder (`aspectRatio: 1` al 100% de ancho) se volvía excesivamente alto en viewports anchos (build web de escritorio), empujando los botones fuera de pantalla sin hacer scroll. Corregido con `maxHeight: 360` además del `aspectRatio`.
+
+## 10. Validación ejecutada
+
+- **`npx tsc --noEmit`**: ✅ sin errores.
+- **`npm run lint`** (`expo lint`): ✅ 0 errores, 2 warnings preexistentes sin relación (patrón oficial de Expo en `useStorageState.ts`, ya presentes antes de esta tarea).
+- **Verificación en navegador** (Metro web, `localhost:8081`, usuario de prueba desechable — eliminado al terminar junto con un residuo de `evolution-empty-test@example.com` encontrado de una sesión previa a esta conversación, 0 usuarios/mediciones/fotos residuales confirmado):
+  - Home con estado vacío → correcto.
+  - Registrar medición completa (peso + 3 opcionales) → `201`, navegación de regreso correcta al entrar por el flujo real (Home → Agregar).
+  - Home con datos reales → las 4 tarjetas, el gráfico con el punto correcto y la etiqueta de fecha, y la sección de fotos en estado vacío, todos coinciden con el diseño de Figma de `composicion-corporal`.
+  - Galería de fotos en estado vacío → correcto.
+  - Pantalla Agregar Foto → estructura, botones de selector y estado deshabilitado de "Subir Foto" (sin imagen seleccionada) verificados. **No se activaron los selectores nativos de cámara/galería** (abrirían diálogos del sistema operativo fuera del control de la sesión de automatización) — pendiente de probar en un simulador/dispositivo real.
+- **`npm run build`** y **`npm run test`** del backend re-ejecutados tras el fix del bug de Storage: ✅ build limpio, 7/7 tests.
+
+## 11. Pendiente / siguientes pasos
+
+- Probar el flujo de subida de fotos de extremo a extremo en un simulador o dispositivo real (el picker de cámara/galería no se pudo ejercitar en el navegador).
+- Sigue pendiente el paso manual de la Parte A, sección 7 (bucket de Storage + `SUPABASE_SERVICE_ROLE_KEY`) para que `/progress-photos/*` funcione más allá del estado vacío.
+- No se agregó UI para `DELETE /body-metrics/:id` (la función ya existe en `bodyCompositionApi.ts` pero no está conectada a ninguna pantalla) — no estaba en el alcance de las 4 pantallas pedidas; considerar para una siguiente iteración si se quiere permitir corregir mediciones erróneas.

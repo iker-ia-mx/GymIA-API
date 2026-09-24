@@ -111,6 +111,10 @@ export class BodyCompositionService {
       orderBy: { takenAt: 'desc' },
     });
 
+    if (photos.length === 0) {
+      return [];
+    }
+
     const bucket = this.getStorageBucket();
     return Promise.all(
       photos.map(async (photo) => {
