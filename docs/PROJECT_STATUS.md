@@ -1,10 +1,20 @@
-# GymIA API — Estado del Proyecto
+# GymIA — Estado del Proyecto
 
 **Fecha:** 2026-09-24
-**Repo:** `GymIA-API` (`https://github.com/iker-ia-mx/GymIA-API`), rama `main` en `bd62f73`
-**Repo hermano:** `~/GymIA/mobile` (Expo/React Native, gestionado aparte)
+**Estado general:** ambos repos (backend y mobile) están respaldados en GitHub y sincronizados. El riesgo P0 identificado en `docs/NEXT_STEPS.md` (código de `mobile` sin respaldo, existiendo solo en disco local) quedó **mitigado**.
 
 ---
+
+## Repositorios
+
+| Repo | URL | Rama | Último commit | Estado |
+|---|---|---|---|---|
+| **GymIA API** (backend, NestJS) | `https://github.com/iker-ia-mx/GymIA-API` | `main` | `6f2e665` | ✅ Respaldado y sincronizado |
+| **GymIA-Mobile-App** (frontend, Expo/React Native) | `https://github.com/iker-ia-mx/GymIA-Mobile-App` | `main` | `25e3d7c` | ✅ Creado y sincronizado en esta sesión |
+
+- `GymIA-Mobile-App` es un repositorio **nuevo**, creado en esta sesión específicamente para el código del frontend construido hasta ahora (Auth, Entrenar, Evolución). Antes de esto, todo `src/` de `mobile` existía únicamente en disco local, sin ningún respaldo remoto — el único commit previo era el scaffold vacío de `create-expo-app`.
+- Se evaluó y descartó reutilizar el repositorio `gymia-mobile` (minúsculas) de la cuenta `iker-ia-mx`: contiene un proyecto GymIA distinto y no relacionado (176 commits, 2026-09-01 a 2026-09-11, con un alcance de producto mucho más amplio — generación de rutinas por IA, mundo/comunidad, nutrición, profesionales). Se dejó intacto, sin modificar.
+- `git fetch` + comparación de SHA (`git rev-parse main` vs `git rev-parse origin/main`) confirmó que ambos repos tienen `origin/main` sincronizada con el historial local al cierre de esta sesión.
 
 ## Estado actual del backend
 
@@ -160,6 +170,8 @@ model SetLog {
 Todas las entidades propiedad de un usuario tienen relación explícita con `User` (directa o encadenada vía `Routine`/`WorkoutSession`), con `onDelete: Cascade`, preparadas para multiusuario desde el diseño original. El módulo Evolución no añadió tablas nuevas — deriva todo de `SetLog` en tiempo de consulta.
 
 ## Riesgos pendientes
+
+**Mitigado en esta sesión:** el riesgo P0 de `docs/NEXT_STEPS.md` ("código de `mobile` sin respaldo, con riesgo de pérdida irreversible") quedó resuelto — ver sección Repositorios arriba.
 
 - **`getCompletedSets` sin paginación ni caché**: el módulo Evolución trae todas las series completadas del usuario en cada request. Aceptable para el volumen actual, pero escalará mal con usuarios de largo historial.
 - **`progressScore` es una heurística fija (60% frecuencia / 40% tendencia)**, no validada con datos de uso real — puede necesitar recalibración.
