@@ -12,7 +12,10 @@ vi.mock('bcrypt', () => ({
 
 describe('AuthService', () => {
   let authService: AuthService;
-  let prisma: { user: { findUnique: Mock; create: Mock } };
+  let prisma: {
+    user: { findUnique: Mock; create: Mock };
+    refreshToken: { create: Mock; findUnique: Mock; update: Mock };
+  };
   let jwtService: { signAsync: Mock };
 
   const mockUser = {
@@ -29,6 +32,11 @@ describe('AuthService', () => {
       user: {
         findUnique: vi.fn(),
         create: vi.fn(),
+      },
+      refreshToken: {
+        create: vi.fn().mockResolvedValue({ id: 'refresh-id-1' }),
+        findUnique: vi.fn(),
+        update: vi.fn(),
       },
     };
 
@@ -109,6 +117,7 @@ describe('AuthService', () => {
 
       expect(result).toEqual({
         accessToken: 'signed.jwt.token',
+        refreshToken: expect.any(String),
         user: {
           id: mockUser.id,
           email: mockUser.email,
@@ -120,6 +129,7 @@ describe('AuthService', () => {
         sub: mockUser.id,
         email: mockUser.email,
       });
+      expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
     });
 
     it('con un email inexistente lanza UnauthorizedException', async () => {
@@ -141,6 +151,73 @@ describe('AuthService', () => {
         authService.login({ email: mockUser.email, password: 'wrong-password' }),
       ).rejects.toThrow(UnauthorizedException);
 
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refreshTokens', () => {
+    const validStoredToken = {
+      id: 'refresh-id-1',
+      userId: mockUser.id,
+      tokenHash: 'irrelevant-in-this-mock',
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      createdAt: new Date(),
+      revokedAt: null as Date | null,
+    };
+
+    it('con un refresh token válido emite un nuevo access token y rota el refresh token', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(validStoredToken);
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      jwtService.signAsync.mockResolvedValue('new.signed.jwt.token');
+
+      const result = await authService.refreshTokens('some-raw-refresh-token');
+
+      expect(result).toEqual({
+        accessToken: 'new.signed.jwt.token',
+        refreshToken: expect.any(String),
+        user: {
+          id: mockUser.id,
+          email: mockUser.email,
+          createdAt: mockUser.createdAt,
+        },
+      });
+      expect(prisma.refreshToken.update).toHaveBeenCalledWith({
+        where: { id: validStoredToken.id },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(prisma.refreshToken.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('con un refresh token inexistente lanza UnauthorizedException', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue(null);
+
+      await expect(authService.refreshTokens('unknown-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('con un refresh token revocado lanza UnauthorizedException', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...validStoredToken,
+        revokedAt: new Date(),
+      });
+
+      await expect(authService.refreshTokens('revoked-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('con un refresh token expirado lanza UnauthorizedException', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...validStoredToken,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+
+      await expect(authService.refreshTokens('expired-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
       expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
   });

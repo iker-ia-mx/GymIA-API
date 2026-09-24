@@ -18,6 +18,20 @@ model User {
   workoutSessions WorkoutSession[]
   bodyMetrics     BodyMetric[]
   progressPhotos  ProgressPhoto[]
+  refreshTokens   RefreshToken[]
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Exercise {
