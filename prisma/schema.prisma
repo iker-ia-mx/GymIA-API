@@ -16,6 +16,8 @@ model User {
 
   routines        Routine[]
   workoutSessions WorkoutSession[]
+  bodyMetrics     BodyMetric[]
+  progressPhotos  ProgressPhoto[]
 }
 
 model Exercise {
@@ -98,4 +100,34 @@ model SetLog {
   sessionExercise WorkoutSessionExercise @relation(fields: [sessionExerciseId], references: [id], onDelete: Cascade)
 
   @@index([sessionExerciseId])
+}
+
+model BodyMetric {
+  id         String   @id @default(uuid())
+  userId     String
+  recordedAt DateTime @default(now())
+  weightKg   Float
+  bodyFatPct Float?
+  leanMassKg Float?
+  waistCm    Float?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, recordedAt])
+}
+
+model ProgressPhoto {
+  id          String   @id @default(uuid())
+  userId      String
+  storagePath String
+  contentType String   @default("image/jpeg")
+  takenAt     DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, takenAt])
 }

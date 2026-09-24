@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WorkoutsModule } from './workouts/workouts.module.js';
 import { EvolutionModule } from './evolution/evolution.module.js';
+import { BodyCompositionModule } from './body-composition/body-composition.module.js';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { EvolutionModule } from './evolution/evolution.module.js';
     AuthModule,
     WorkoutsModule,
     EvolutionModule,
+    BodyCompositionModule,
   ],
   controllers: [AppController],
   providers: [AppService],
