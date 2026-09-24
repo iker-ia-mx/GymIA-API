@@ -212,7 +212,7 @@ export class NutritionService {
     ]);
 
     const allItems = meals.flatMap((meal) => meal.items);
-    const totals = allItems.reduce(
+    const rawTotals = allItems.reduce(
       (sum, item) => ({
         totalCaloriesKcal: sum.totalCaloriesKcal + item.caloriesKcal,
         totalProteinG: sum.totalProteinG + item.proteinG,
@@ -221,6 +221,16 @@ export class NutritionService {
       }),
       { totalCaloriesKcal: 0, totalProteinG: 0, totalCarbsG: 0, totalFatG: 0 },
     );
+
+    // Redondeo a 1 decimal antes de exponer — mismo patrón que EvolutionService
+    // (Math.round(x * 10) / 10), evita artefactos de punto flotante como
+    // 5.6000000000000005 en la respuesta.
+    const totals = {
+      totalCaloriesKcal: Math.round(rawTotals.totalCaloriesKcal * 10) / 10,
+      totalProteinG: Math.round(rawTotals.totalProteinG * 10) / 10,
+      totalCarbsG: Math.round(rawTotals.totalCarbsG * 10) / 10,
+      totalFatG: Math.round(rawTotals.totalFatG * 10) / 10,
+    };
 
     return {
       date: startOfDay.toISOString(),
