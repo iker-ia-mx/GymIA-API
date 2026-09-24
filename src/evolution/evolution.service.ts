@@ -164,7 +164,7 @@ export class EvolutionService {
   private computeRecentRecords(completedSets: CompletedSet[]) {
     const bestByExercise = new Map<
       string,
-      { exerciseName: string; weightKg: number; achievedAt: Date }
+      { exerciseId: string; exerciseName: string; weightKg: number; achievedAt: Date }
     >();
 
     for (const set of completedSets) {
@@ -173,6 +173,7 @@ export class EvolutionService {
       const current = bestByExercise.get(exerciseId);
       if (!current || set.weightKg > current.weightKg) {
         bestByExercise.set(exerciseId, {
+          exerciseId,
           exerciseName: set.sessionExercise.exercise.name,
           weightKg: set.weightKg,
           achievedAt: set.completedAt,
@@ -186,6 +187,7 @@ export class EvolutionService {
       .filter((record) => record.achievedAt.getTime() >= cutoff)
       .sort((a, b) => b.achievedAt.getTime() - a.achievedAt.getTime())
       .map((record) => ({
+        exerciseId: record.exerciseId,
         exerciseName: record.exerciseName,
         weightKg: record.weightKg,
         achievedAt: record.achievedAt,
