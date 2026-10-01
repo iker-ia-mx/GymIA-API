@@ -1,0 +1,50 @@
+# Blueprint de Render para la API de GymIA (beta cerrada).
+# Región Ohio = misma región de AWS que el proyecto de Supabase (us-east-2),
+# para que cada consulta a Postgres no cruce el país.
+# Los secretos (sync: false) se cargan a mano en el dashboard de Render.
+services:
+  - type: web
+    name: gymia-api
+    runtime: node
+    region: ohio
+    plan: starter
+    branch: main
+    buildCommand: npm ci && npx prisma generate && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: node dist/main
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5
+      - key: ANTHROPIC_TIMEOUT_MS
+        value: "15000"
+      - key: COACH_FREE_DAILY_LIMIT
+        value: "5"
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: SUPABASE_STORAGE_BUCKET
+        value: progress-photos
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: COACH_UNLIMITED_EMAILS
+        sync: false
