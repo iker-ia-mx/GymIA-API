@@ -11,6 +11,10 @@ import { EvolutionModule } from './evolution/evolution.module.js';
 import { BodyCompositionModule } from './body-composition/body-composition.module.js';
 import { NutritionModule } from './nutrition/nutrition.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
+import { SleepModule } from './sleep/sleep.module.js';
+import { SquadModule } from './squad/squad.module.js';
+import { CoachModule } from './coach/coach.module.js';
+import { HealthModule } from './health/health.module.js';
 
 @Module({
   imports: [
@@ -23,6 +27,10 @@ import { OnboardingModule } from './onboarding/onboarding.module.js';
     BodyCompositionModule,
     NutritionModule,
     OnboardingModule,
+    SleepModule,
+    SquadModule,
+    CoachModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

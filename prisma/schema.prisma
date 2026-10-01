@@ -24,6 +24,15 @@ model User {
   meals             Meal[]
   nutritionGoal     NutritionGoal?
   onboardingProfile OnboardingProfile?
+  recipes           Recipe[]
+  mealSchedule      MealScheduleEntry[]
+  sleepSessions     SleepSession[]
+  sleepDataSources  SleepDataSource[]
+  squadMembership   SquadMembership?
+  squadPosts        SquadPost[]
+  squadPostLikes    SquadPostLike[]
+  aiDecisions       AIDecision[]
+  conversations     Conversation[]
 }
 
 // Respuestas del cuestionario de onboarding (w02-w05 en Figma). Se usa una
@@ -42,18 +51,25 @@ model OnboardingProfile {
   musclePriorities   String[]
   keepExercises      String[]
   avoidExercises     String[]
+  // IANA timezone (ej. "America/Mexico_City") — default por DEC-010
+  // (México primero, precios en MXN). Corrige el bug ya señalado en
+  // 01.02 Auditoría backend ("adherencia cuenta los días entrenados como
+  // fallidos… todo hoy/semana en UTC"): el Motor de Adherencia bucketea
+  // por este huso, no por UTC. Sin selector propio en el onboarding
+  // todavía — mismo default para todos hasta que exista esa pantalla.
+  timezone           String   @default("America/Mexico_City")
   createdAt          DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model RefreshToken {
-  id         String    @id @default(uuid())
-  userId     String
-  tokenHash  String    @unique
-  expiresAt  DateTime
-  createdAt  DateTime  @default(now())
-  revokedAt  DateTime?
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -106,8 +122,8 @@ model WorkoutSession {
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  user      User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  routine   Routine?                  @relation(fields: [routineId], references: [id])
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routine   Routine?                 @relation(fields: [routineId], references: [id])
   exercises WorkoutSessionExercise[]
 
   @@index([userId])
@@ -188,8 +204,9 @@ model Food {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  mealItems MealItem[]
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mealItems         MealItem[]
+  recipeIngredients RecipeIngredient[]
 
   @@index([userId])
   @@index([userId, name])
@@ -239,4 +256,253 @@ model NutritionGoal {
   updatedAt         DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Receta guardada por el usuario (Screen-4-Detalle-Receta / S2-MyRecipes en
+// Figma). Los macros totales NO se guardan aquí — se calculan sumando
+// RecipeIngredient.*G en el servicio, igual que el patrón ya usado por
+// MealItem (snapshot por ingrediente, no por receta), para que editar un
+// Food no desincronice recetas ya guardadas.
+model Recipe {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  description String?
+  prepTimeMin Int?
+  difficulty  String? // facil | medio | dificil
+  isFavorite  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingredients RecipeIngredient[]
+
+  @@index([userId])
+}
+
+model RecipeIngredient {
+  id           String @id @default(uuid())
+  recipeId     String
+  foodId       String
+  quantityG    Float
+  // Snapshot de macros al momento de agregar el ingrediente — mismo
+  // principio que MealItem, independiente de ediciones posteriores a Food.
+  caloriesKcal Float
+  proteinG     Float
+  carbsG       Float
+  fatG         Float
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  food   Food   @relation(fields: [foodId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+  @@index([foodId])
+}
+
+// Horarios de comida configurables (Screen-6-Comidas-Horarios). Un registro
+// por tipo de comida por usuario — reutiliza el mismo vocabulario de
+// mealType que Meal ("desayuno"|"comida"|"cena"|"snack").
+model MealScheduleEntry {
+  id              String  @id @default(uuid())
+  userId          String
+  mealType        String
+  enabled         Boolean @default(true)
+  timeOfDay       String // "HH:mm", 24h
+  reminderEnabled Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mealType])
+  @@index([userId])
+}
+
+// Sesión de sueño (docs/SLEEP_PRODUCT_SPEC.md §6). MVP aprobado: poblada por
+// importación real desde una sola fuente nativa (Apple Health o Health
+// Connect) — no hay tracking en vivo con sensores propios en esta fase, ver
+// docs/SUENO_ESCUADRON_DECISIONS.md. Nunca referencia a Escuadrón (módulo
+// desacoplado a propósito).
+model SleepSession {
+  id                 String    @id @default(uuid())
+  userId             String
+  startedAt          DateTime
+  endedAt            DateTime?
+  timeInBedMinutes   Int?
+  sleepEfficiencyPct Float?
+  recoveryScorePct   Float?
+  avgHeartRateBpm    Float?
+  minHeartRateBpm    Float?
+  hrvMs              Float?
+  respiratoryRateBpm Float?
+  dataQuality        String? // "alta" | "media" | "baja"
+  source             String // "apple_health" | "health_connect" (único par de valores soportados en el MVP)
+  createdAt          DateTime  @default(now())
+
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stages SleepStageEvent[]
+
+  @@index([userId])
+  @@index([userId, startedAt])
+}
+
+// Fases de sueño (REM/Ligero/Profundo/Despierto) importadas junto con la
+// sesión — HealthKit y Health Connect exponen esta granularidad incluso en
+// una simple importación histórica, sin necesidad de tracking en vivo.
+model SleepStageEvent {
+  id        String    @id @default(uuid())
+  sessionId String
+  stage     String // "ligero" | "profundo" | "rem" | "despierto"
+  startedAt DateTime
+  endedAt   DateTime?
+
+  session SleepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+// Una fuente conectada por usuario (Apps y Relojes). El MVP solo activa una
+// a la vez — el resto del catálogo (Oura, WHOOP, Garmin, etc.) se muestra en
+// mobile como "Próximamente", sin fila propia en esta tabla todavía.
+model SleepDataSource {
+  id                    String    @id @default(uuid())
+  userId                String
+  provider              String // "apple_health" | "health_connect"
+  status                String // "conectado" | "disponible" | "requiere_permiso" | "desvinculado"
+  lastSyncedAt          DateTime?
+  grantsSleepAnalysis   Boolean   @default(false)
+  grantsHeartRate       Boolean   @default(false)
+  grantsRespiratoryRate Boolean   @default(false)
+  grantsHrv             Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+// Escuadrón — identidad de equipo (docs/ESCUADRON_TECHNICAL_ARCHITECTURE.md).
+// `inviteCode` es el único mecanismo de unión del MVP: unirse es instantáneo
+// al conocer el código, sin aprobación ni invitación dirigida a un contacto
+// (eso queda documentado como v1.1 en ESCUADRON_PRODUCT_SPEC.md — no existe
+// un modelo SquadInvite separado en el MVP, este campo lo reemplaza).
+model Squad {
+  id         String   @id @default(uuid())
+  name       String
+  isPrivate  Boolean  @default(false)
+  inviteCode String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  members SquadMembership[]
+  posts   SquadPost[]
+
+  @@index([inviteCode])
+}
+
+// Membresía — tabla puente real entre User y Squad. Un usuario pertenece a
+// un único escuadrón a la vez en el MVP (no se aprobó multi-escuadrón,
+// @@unique([userId]) lo hace explícito). xp/streakDays se recalculan de
+// forma diferida (no acoplados a WorkoutsService, ver arquitectura §7
+// riesgo 4) para mantener el aislamiento existente intacto.
+model SquadMembership {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  squadId    String
+  role       String // "lider" | "miembro"
+  xp         Int      @default(0)
+  streakDays Int      @default(0)
+  joinedAt   DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  squad Squad @relation(fields: [squadId], references: [id], onDelete: Cascade)
+
+  @@index([squadId])
+}
+
+// Publicación del feed de Escuadrón. Solo texto en el MVP (sin multimedia).
+// Es el único canal por el que Progreso Corporal/Nutrición pueden llegar a
+// ser visibles a otros miembros — nunca se exponen automáticamente (ver
+// matriz de privacidad aprobada en SUENO_ESCUADRON_DECISIONS.md).
+model SquadPost {
+  id        String   @id @default(uuid())
+  squadId   String
+  authorId  String
+  type      String // "entrenamiento" | "comida" | "progreso"
+  text      String
+  createdAt DateTime @default(now())
+
+  squad  Squad           @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  author User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes  SquadPostLike[]
+
+  @@index([squadId])
+  @@index([squadId, createdAt])
+}
+
+model SquadPostLike {
+  id     String @id @default(uuid())
+  postId String
+  userId String
+
+  post SquadPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+}
+
+// Libro mayor de decisiones del Coach GymIA (04.01 GymIA Brain ·
+// Arquitectura IA, vault Master Brain V2). v0: motores deterministas,
+// sin modelo de IA — "los motores deciden, el LLM explica" (DEC-014).
+// Cada llamada a /coach/today o /coach/weekly-review persiste aquí sus
+// entradas, versión y resultado: "una decisión sin resultado es un dato
+// perdido" (04.03 Datos propios y foso de IA). engine/engineVersion
+// permiten evolucionar la fórmula sin perder el historial.
+model AIDecision {
+  id            String   @id @default(uuid())
+  userId        String
+  engine        String // "coach_today" | "coach_weekly_review"
+  engineVersion String
+  forDate       DateTime @db.Date
+  output        Json
+  reasons       Json
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, engine, forDate])
+  @@index([userId])
+}
+
+// Conversación del Coach GymIA (N04 de GYMIA MASTER FLOW V1). El
+// historial vive aquí exista o no un proveedor de LLM conectado: v0
+// responde con la decisión del día ya calculada por `CoachService`
+// (DEC-014 "los motores deciden, el LLM explica"); cuando se conecte un
+// proveedor real (ver `src/coach/llm`), sus respuestas se guardan en el
+// mismo modelo, sin migración nueva.
+model Conversation {
+  id            String   @id @default(uuid())
+  userId        String
+  startedAt     DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([userId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String // "user" | "assistant" | "system"
+  content        String
+  providerName   String? // null = respondió el motor v0, no un LLM
+  providerMeta   Json? // tokens, costo, modelo — se llena cuando hay proveedor real
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([conversationId, createdAt])
 }

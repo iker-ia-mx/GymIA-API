@@ -9,7 +9,10 @@ import { AddMealItemDto } from './dto/add-meal-item.dto.js';
 import { CreateFoodDto } from './dto/create-food.dto.js';
 import { CreateMealDto } from './dto/create-meal.dto.js';
 import { CreateNutritionGoalDto } from './dto/create-nutrition-goal.dto.js';
+import { CreateRecipeDto } from './dto/create-recipe.dto.js';
 import { UpdateFoodDto } from './dto/update-food.dto.js';
+import { UpdateRecipeDto } from './dto/update-recipe.dto.js';
+import { UpsertMealScheduleEntryDto } from './dto/upsert-meal-schedule.dto.js';
 
 const DEFAULT_SERVING_SIZE_G = 100;
 
@@ -25,6 +28,44 @@ function getStartOfTodayUTC(): Date {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
+
+// Snapshot de macros para una cantidad dada de un Food — mismo cálculo que
+// ya usaba addMealItem, extraído para reutilizarlo también en recetas.
+function scaleMacros(
+  food: { caloriesKcal: number; proteinG: number; carbsG: number; fatG: number; servingSizeG: number | null },
+  quantityG: number,
+) {
+  const servingSizeG = food.servingSizeG ?? DEFAULT_SERVING_SIZE_G;
+  const multiplier = quantityG / servingSizeG;
+  return {
+    caloriesKcal: food.caloriesKcal * multiplier,
+    proteinG: food.proteinG * multiplier,
+    carbsG: food.carbsG * multiplier,
+    fatG: food.fatG * multiplier,
+  };
+}
+
+function sumMacros<T extends { caloriesKcal: number; proteinG: number; carbsG: number; fatG: number }>(
+  items: T[],
+) {
+  return items.reduce(
+    (sum, item) => ({
+      caloriesKcal: sum.caloriesKcal + item.caloriesKcal,
+      proteinG: sum.proteinG + item.proteinG,
+      carbsG: sum.carbsG + item.carbsG,
+      fatG: sum.fatG + item.fatG,
+    }),
+    { caloriesKcal: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+  );
+}
+
+const recipeInclude = {
+  ingredients: {
+    include: {
+      food: { select: { id: true, name: true } },
+    },
+  },
+};
 
 @Injectable()
 export class NutritionService {
@@ -144,18 +185,35 @@ export class NutritionService {
     await this.getMealById(userId, mealId);
     const food = await this.getFoodById(userId, dto.foodId);
 
-    const servingSizeG = food.servingSizeG ?? DEFAULT_SERVING_SIZE_G;
-    const multiplier = dto.quantityG / servingSizeG;
-
     return this.prisma.mealItem.create({
       data: {
         mealId,
         foodId: food.id,
         quantityG: dto.quantityG,
-        caloriesKcal: food.caloriesKcal * multiplier,
-        proteinG: food.proteinG * multiplier,
-        carbsG: food.carbsG * multiplier,
-        fatG: food.fatG * multiplier,
+        ...scaleMacros(food, dto.quantityG),
+      },
+    });
+  }
+
+  async updateMealItemQuantity(
+    userId: string,
+    mealId: string,
+    itemId: string,
+    quantityG: number,
+  ) {
+    const meal = await this.getMealById(userId, mealId);
+    const item = meal.items.find((mealItem) => mealItem.id === itemId);
+    if (!item) {
+      throw new NotFoundException('Meal item not found in this meal');
+    }
+
+    const food = await this.getFoodById(userId, item.foodId);
+
+    return this.prisma.mealItem.update({
+      where: { id: itemId },
+      data: {
+        quantityG,
+        ...scaleMacros(food, quantityG),
       },
     });
   }
@@ -170,6 +228,59 @@ export class NutritionService {
 
     await this.prisma.mealItem.delete({ where: { id: itemId } });
     return { id: itemId };
+  }
+
+  // "Repetir esta comida" (s01-context-menu en Figma, adaptado a comidas ya
+  // registradas — ver nota de honestidad en el plan maestro): clona una
+  // comida existente como una comida nueva de hoy, con snapshots
+  // independientes (no comparte MealItem con el original).
+  async duplicateMeal(userId: string, mealId: string) {
+    const meal = await this.getMealById(userId, mealId);
+
+    return this.prisma.meal.create({
+      data: {
+        userId,
+        mealType: meal.mealType,
+        items: {
+          create: meal.items.map((item) => ({
+            foodId: item.foodId,
+            quantityG: item.quantityG,
+            caloriesKcal: item.caloriesKcal,
+            proteinG: item.proteinG,
+            carbsG: item.carbsG,
+            fatG: item.fatG,
+          })),
+        },
+      },
+      include: mealInclude,
+    });
+  }
+
+  // "Guardar como receta" (s01-context-menu): convierte los ítems ya
+  // registrados de una comida en una Recipe reutilizable.
+  async createRecipeFromMeal(userId: string, mealId: string, name: string) {
+    const meal = await this.getMealById(userId, mealId);
+    if (meal.items.length === 0) {
+      throw new ConflictException('This meal has no items to save as a recipe');
+    }
+
+    return this.prisma.recipe.create({
+      data: {
+        userId,
+        name,
+        ingredients: {
+          create: meal.items.map((item) => ({
+            foodId: item.foodId,
+            quantityG: item.quantityG,
+            caloriesKcal: item.caloriesKcal,
+            proteinG: item.proteinG,
+            carbsG: item.carbsG,
+            fatG: item.fatG,
+          })),
+        },
+      },
+      include: recipeInclude,
+    });
   }
 
   // ---- NutritionGoal ----
@@ -238,5 +349,174 @@ export class NutritionService {
       mealCount: meals.length,
       goal,
     };
+  }
+
+  // ---- Recipes ----
+
+  private async buildIngredientRows(userId: string, ingredients: { foodId: string; quantityG: number }[]) {
+    return Promise.all(
+      ingredients.map(async (input) => {
+        const food = await this.getFoodById(userId, input.foodId);
+        return {
+          foodId: food.id,
+          quantityG: input.quantityG,
+          ...scaleMacros(food, input.quantityG),
+        };
+      }),
+    );
+  }
+
+  async createRecipe(userId: string, dto: CreateRecipeDto) {
+    const ingredientRows = await this.buildIngredientRows(userId, dto.ingredients);
+
+    return this.prisma.recipe.create({
+      data: {
+        userId,
+        name: dto.name,
+        description: dto.description,
+        prepTimeMin: dto.prepTimeMin,
+        difficulty: dto.difficulty,
+        ingredients: { create: ingredientRows },
+      },
+      include: recipeInclude,
+    });
+  }
+
+  async getRecipes(userId: string) {
+    const recipes = await this.prisma.recipe.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: recipeInclude,
+    });
+
+    return recipes.map((recipe) => ({
+      ...recipe,
+      totals: sumMacros(recipe.ingredients),
+    }));
+  }
+
+  async getRecipeById(userId: string, id: string) {
+    const recipe = await this.prisma.recipe.findUnique({
+      where: { id },
+      include: recipeInclude,
+    });
+    if (!recipe) {
+      throw new NotFoundException('Recipe not found');
+    }
+    if (recipe.userId !== userId) {
+      throw new ForbiddenException('This recipe does not belong to you');
+    }
+    return { ...recipe, totals: sumMacros(recipe.ingredients) };
+  }
+
+  async updateRecipe(userId: string, id: string, dto: UpdateRecipeDto) {
+    await this.getRecipeById(userId, id);
+
+    const ingredientRows = dto.ingredients
+      ? await this.buildIngredientRows(userId, dto.ingredients)
+      : undefined;
+
+    const recipe = await this.prisma.recipe.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.prepTimeMin !== undefined ? { prepTimeMin: dto.prepTimeMin } : {}),
+        ...(dto.difficulty !== undefined ? { difficulty: dto.difficulty } : {}),
+        ...(dto.isFavorite !== undefined ? { isFavorite: dto.isFavorite } : {}),
+        ...(ingredientRows
+          ? { ingredients: { deleteMany: {}, create: ingredientRows } }
+          : {}),
+      },
+      include: recipeInclude,
+    });
+
+    return { ...recipe, totals: sumMacros(recipe.ingredients) };
+  }
+
+  async deleteRecipe(userId: string, id: string) {
+    await this.getRecipeById(userId, id);
+    await this.prisma.recipe.delete({ where: { id } });
+    return { id };
+  }
+
+  // "Duplicar" en Screen-4-Detalle-Receta.
+  async duplicateRecipe(userId: string, id: string) {
+    const recipe = await this.getRecipeById(userId, id);
+
+    const created = await this.prisma.recipe.create({
+      data: {
+        userId,
+        name: `${recipe.name} (copia)`,
+        description: recipe.description,
+        prepTimeMin: recipe.prepTimeMin,
+        difficulty: recipe.difficulty,
+        ingredients: {
+          create: recipe.ingredients.map((ingredient) => ({
+            foodId: ingredient.foodId,
+            quantityG: ingredient.quantityG,
+            caloriesKcal: ingredient.caloriesKcal,
+            proteinG: ingredient.proteinG,
+            carbsG: ingredient.carbsG,
+            fatG: ingredient.fatG,
+          })),
+        },
+      },
+      include: recipeInclude,
+    });
+
+    return { ...created, totals: sumMacros(created.ingredients) };
+  }
+
+  // "Añadir" en Screen-4-Detalle-Receta: registra la receta como una comida
+  // de hoy, con snapshots propios (independientes de ediciones futuras a la
+  // receta o a los Food subyacentes).
+  async addRecipeToDiary(userId: string, id: string, mealType: string) {
+    const recipe = await this.getRecipeById(userId, id);
+
+    return this.prisma.meal.create({
+      data: {
+        userId,
+        mealType,
+        items: {
+          create: recipe.ingredients.map((ingredient) => ({
+            foodId: ingredient.foodId,
+            quantityG: ingredient.quantityG,
+            caloriesKcal: ingredient.caloriesKcal,
+            proteinG: ingredient.proteinG,
+            carbsG: ingredient.carbsG,
+            fatG: ingredient.fatG,
+          })),
+        },
+      },
+      include: mealInclude,
+    });
+  }
+
+  // ---- Meal schedule ----
+
+  getMealSchedule(userId: string) {
+    return this.prisma.mealScheduleEntry.findMany({
+      where: { userId },
+      orderBy: { timeOfDay: 'asc' },
+    });
+  }
+
+  upsertMealScheduleEntry(userId: string, dto: UpsertMealScheduleEntryDto) {
+    return this.prisma.mealScheduleEntry.upsert({
+      where: { userId_mealType: { userId, mealType: dto.mealType } },
+      create: {
+        userId,
+        mealType: dto.mealType,
+        enabled: dto.enabled ?? true,
+        timeOfDay: dto.timeOfDay,
+        reminderEnabled: dto.reminderEnabled ?? true,
+      },
+      update: {
+        ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
+        timeOfDay: dto.timeOfDay,
+        ...(dto.reminderEnabled !== undefined ? { reminderEnabled: dto.reminderEnabled } : {}),
+      },
+    });
   }
 }
