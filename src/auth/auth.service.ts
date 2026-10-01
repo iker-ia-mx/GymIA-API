@@ -3,6 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
+import { DeleteAccountDto } from './dto/delete-account.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 
@@ -99,6 +101,52 @@ export class AuthService {
       refreshToken,
       user: this.buildUserResponse(user),
     };
+  }
+
+  // "Cambiar Contraseña" (Perfil → Seguridad y Avisos). Requiere la
+  // contraseña actual — mismo patrón de verificación que login, nunca se
+  // confía en el userId del JWT solo para una operación sensible. Revoca
+  // todos los refresh tokens vivos (deuda técnica ya señalada en
+  // 01.02 Auditoría backend: "cambiar contraseña no revoca refresh
+  // tokens") — una sesión robada con el refresh token anterior no debe
+  // sobrevivir a un cambio de contraseña.
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const passwordMatches = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!passwordMatches) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+    await this.prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  // "Eliminar Cuenta Permanente" (Perfil → Ayuda y Soporte, Zona de
+  // Peligro). Requiere reingresar la contraseña — acción irreversible.
+  // El borrado en cascada de todo el resto de los datos del usuario
+  // (rutinas, sesiones, métricas, comidas, sueño, escuadrón, etc.) ya está
+  // garantizado por `onDelete: Cascade` en cada relación del esquema
+  // Prisma — un solo `user.delete` es seguro y completo.
+  async deleteAccount(userId: string, dto: DeleteAccountDto): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const passwordMatches = await bcrypt.compare(dto.password, user.password);
+    if (!passwordMatches) {
+      throw new UnauthorizedException('Password is incorrect');
+    }
+
+    await this.prisma.user.delete({ where: { id: userId } });
   }
 
   private async issueRefreshToken(userId: string): Promise<string> {

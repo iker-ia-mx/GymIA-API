@@ -90,6 +90,24 @@ describe('EvolutionService', () => {
       expect(result.sessionsLast7Days).toBe(0);
       expect(result.progressScore).toBeGreaterThanOrEqual(0);
     });
+
+    it('acota la consulta a los últimos 21 días (01.02: "Evolution carga todas las series en cada petición")', async () => {
+      prisma.setLog.findMany.mockResolvedValue([]);
+
+      await service.getSummary(userId);
+
+      expect(prisma.setLog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            completedAt: { gte: expect.any(Date) },
+          }),
+        }),
+      );
+      const call = prisma.setLog.findMany.mock.calls[0][0];
+      const sinceArg: Date = call.where.completedAt.gte;
+      const daysAgoArg = (Date.now() - sinceArg.getTime()) / (24 * 60 * 60 * 1000);
+      expect(daysAgoArg).toBeCloseTo(21, 0);
+    });
   });
 
   describe('getSummary — volumen no infla con series muy antiguas', () => {
@@ -108,6 +126,15 @@ describe('EvolutionService', () => {
   });
 
   describe('getStrengthOverview — 1RM estimado (Epley)', () => {
+    it('NO acota por fecha — los récords son de todo el historial, a diferencia de getSummary', async () => {
+      prisma.setLog.findMany.mockResolvedValue([]);
+
+      await service.getStrengthOverview(userId);
+
+      const call = prisma.setLog.findMany.mock.calls[0][0];
+      expect(call.where.completedAt).toBeUndefined();
+    });
+
     it('calcula el 1RM con la fórmula de Epley', async () => {
       // weightKg * (1 + reps/30) => 100 * (1 + 5/30) = 116.66...
       prisma.setLog.findMany.mockResolvedValue([
@@ -152,6 +179,39 @@ describe('EvolutionService', () => {
 
       expect(result.exercises).toEqual([]);
       expect(result.weeklyVolumeKg).toBe(0);
+    });
+
+    it('incluye la fecha real (achievedAt) del set que produjo el récord actual', async () => {
+      const recordDate = daysAgo(3);
+      prisma.setLog.findMany.mockResolvedValue([
+        completedSet({ weightKg: 100, reps: 1, completedAt: daysAgo(10) }),
+        completedSet({ weightKg: 80, reps: 10, completedAt: recordDate }), // mayor 1RM
+      ]);
+
+      const result = await service.getStrengthOverview(userId);
+
+      expect(result.exercises[0].achievedAt).toEqual(recordDate);
+    });
+
+    it('usa session.startedAt como respaldo cuando el set no tiene completedAt', async () => {
+      const sessionStart = daysAgo(5);
+      prisma.setLog.findMany.mockResolvedValue([
+        {
+          weightKg: 100,
+          reps: 5,
+          completedAt: null,
+          sessionExercise: {
+            exerciseId: exerciseA.id,
+            exercise: exerciseA,
+            sessionId: 'session-1',
+            session: { startedAt: sessionStart },
+          },
+        },
+      ]);
+
+      const result = await service.getStrengthOverview(userId);
+
+      expect(result.exercises[0].achievedAt).toEqual(sessionStart);
     });
   });
 

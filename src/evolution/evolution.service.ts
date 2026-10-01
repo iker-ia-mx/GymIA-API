@@ -2,6 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const RECENT_RECORD_WINDOW_DAYS = 14;
+// getSummary solo necesita, como máximo: la ventana de récords recientes
+// (14 días) y el volumen de la semana actual + anterior (hasta 14 días
+// más en el peor caso, si "hoy" es domingo). 21 días cubre ambos con
+// margen. Deuda técnica ya señalada en 01.02 Auditoría backend: "Evolution
+// carga todas las series en cada petición" — getStrengthOverview y
+// getExerciseHistory sí necesitan el historial completo (récords y
+// tendencias de todo el tiempo) y se dejan sin acotar a propósito.
+const SUMMARY_LOOKBACK_DAYS = 21;
 
 type CompletedSet = {
   weightKg: number;
@@ -33,11 +41,12 @@ function getWeekStart(date: Date): Date {
 export class EvolutionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private getCompletedSets(userId: string): Promise<CompletedSet[]> {
+  private getCompletedSets(userId: string, since?: Date): Promise<CompletedSet[]> {
     return this.prisma.setLog.findMany({
       where: {
         completed: true,
         sessionExercise: { session: { userId } },
+        ...(since ? { completedAt: { gte: since } } : {}),
       },
       orderBy: { completedAt: 'asc' },
       select: {
@@ -57,8 +66,9 @@ export class EvolutionService {
   }
 
   async getSummary(userId: string) {
+    const summarySince = new Date(Date.now() - SUMMARY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
     const [completedSets, sessionsLast7Days] = await Promise.all([
-      this.getCompletedSets(userId),
+      this.getCompletedSets(userId, summarySince),
       this.prisma.workoutSession.count({
         where: {
           userId,
@@ -93,7 +103,10 @@ export class EvolutionService {
     const completedSets = await this.getCompletedSets(userId);
     const volumeTrend = this.computeWeeklyVolume(completedSets);
 
-    const bestByExercise = new Map<string, { exerciseName: string; oneRepMax: number }>();
+    const bestByExercise = new Map<
+      string,
+      { exerciseName: string; oneRepMax: number; achievedAt: Date }
+    >();
     for (const set of completedSets) {
       const exerciseId = set.sessionExercise.exerciseId;
       const oneRepMax = estimateOneRepMax(set.weightKg, set.reps);
@@ -102,6 +115,10 @@ export class EvolutionService {
         bestByExercise.set(exerciseId, {
           exerciseName: set.sessionExercise.exercise.name,
           oneRepMax,
+          // Fecha real del set que produjo este récord — usa completedAt
+          // cuando existe (el caso normal) y cae a session.startedAt si el
+          // set no la tiene, nunca "hoy" ni un valor decorativo.
+          achievedAt: set.completedAt ?? set.sessionExercise.session.startedAt,
         });
       }
     }
@@ -111,6 +128,7 @@ export class EvolutionService {
         exerciseId,
         exerciseName: value.exerciseName,
         currentEstimatedOneRepMax: Math.round(value.oneRepMax * 10) / 10,
+        achievedAt: value.achievedAt,
       }))
       .sort((a, b) => b.currentEstimatedOneRepMax - a.currentEstimatedOneRepMax);
 

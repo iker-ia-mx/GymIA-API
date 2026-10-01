@@ -13,8 +13,8 @@ vi.mock('bcrypt', () => ({
 describe('AuthService', () => {
   let authService: AuthService;
   let prisma: {
-    user: { findUnique: Mock; create: Mock };
-    refreshToken: { create: Mock; findUnique: Mock; update: Mock };
+    user: { findUnique: Mock; create: Mock; update: Mock; delete: Mock };
+    refreshToken: { create: Mock; findUnique: Mock; update: Mock; updateMany: Mock };
   };
   let jwtService: { signAsync: Mock };
 
@@ -32,11 +32,14 @@ describe('AuthService', () => {
       user: {
         findUnique: vi.fn(),
         create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
       },
       refreshToken: {
         create: vi.fn().mockResolvedValue({ id: 'refresh-id-1' }),
         findUnique: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn(),
       },
     };
 
@@ -219,6 +222,97 @@ describe('AuthService', () => {
         UnauthorizedException,
       );
       expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('changePassword', () => {
+    it('actualiza la contraseña cuando la actual es correcta', async () => {
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      (bcrypt.compare as Mock).mockResolvedValue(true);
+      (bcrypt.hash as Mock).mockResolvedValue('new-hashed-password');
+
+      await authService.changePassword(mockUser.id, {
+        currentPassword: 'old-password',
+        newPassword: 'new-password-123',
+      });
+
+      expect(bcrypt.compare).toHaveBeenCalledWith('old-password', mockUser.password);
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: mockUser.id },
+        data: { password: 'new-hashed-password' },
+      });
+    });
+
+    it('revoca todos los refresh tokens vivos del usuario al cambiar la contraseña', async () => {
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      (bcrypt.compare as Mock).mockResolvedValue(true);
+      (bcrypt.hash as Mock).mockResolvedValue('new-hashed-password');
+
+      await authService.changePassword(mockUser.id, {
+        currentPassword: 'old-password',
+        newPassword: 'new-password-123',
+      });
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { userId: mockUser.id, revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+
+    it('rechaza con UnauthorizedException si la contraseña actual es incorrecta', async () => {
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      (bcrypt.compare as Mock).mockResolvedValue(false);
+
+      await expect(
+        authService.changePassword(mockUser.id, {
+          currentPassword: 'wrong-password',
+          newPassword: 'new-password-123',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con UnauthorizedException si el usuario no existe', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        authService.changePassword('unknown-id', {
+          currentPassword: 'old-password',
+          newPassword: 'new-password-123',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAccount', () => {
+    it('elimina la cuenta cuando la contraseña es correcta', async () => {
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      (bcrypt.compare as Mock).mockResolvedValue(true);
+
+      await authService.deleteAccount(mockUser.id, { password: 'correct-password' });
+
+      expect(bcrypt.compare).toHaveBeenCalledWith('correct-password', mockUser.password);
+      expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: mockUser.id } });
+    });
+
+    it('rechaza con UnauthorizedException si la contraseña es incorrecta (sin borrar nada)', async () => {
+      prisma.user.findUnique.mockResolvedValue(mockUser);
+      (bcrypt.compare as Mock).mockResolvedValue(false);
+
+      await expect(
+        authService.deleteAccount(mockUser.id, { password: 'wrong-password' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.user.delete).not.toHaveBeenCalled();
+    });
+
+    it('rechaza con UnauthorizedException si el usuario no existe', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        authService.deleteAccount('unknown-id', { password: 'any-password' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(prisma.user.delete).not.toHaveBeenCalled();
     });
   });
 });

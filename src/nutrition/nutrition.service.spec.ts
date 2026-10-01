@@ -8,8 +8,10 @@ describe('NutritionService', () => {
   let prisma: {
     food: { create: Mock; findMany: Mock; findUnique: Mock; update: Mock; delete: Mock };
     meal: { create: Mock; findMany: Mock; findUnique: Mock; delete: Mock };
-    mealItem: { create: Mock; delete: Mock; count: Mock };
+    mealItem: { create: Mock; update: Mock; delete: Mock; count: Mock };
     nutritionGoal: { upsert: Mock; findUnique: Mock };
+    recipe: { create: Mock; findMany: Mock; findUnique: Mock; update: Mock; delete: Mock };
+    mealScheduleEntry: { findMany: Mock; upsert: Mock };
   };
 
   const userId = 'user-1';
@@ -32,8 +34,10 @@ describe('NutritionService', () => {
     prisma = {
       food: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
       meal: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
-      mealItem: { create: vi.fn(), delete: vi.fn(), count: vi.fn() },
+      mealItem: { create: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
       nutritionGoal: { upsert: vi.fn(), findUnique: vi.fn() },
+      recipe: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
+      mealScheduleEntry: { findMany: vi.fn(), upsert: vi.fn() },
     };
 
     service = new NutritionService(prisma as unknown as PrismaService);
@@ -264,6 +268,186 @@ describe('NutritionService', () => {
       expect(lt.getTime() - gte.getTime()).toBe(24 * 60 * 60 * 1000);
       expect(gte.getUTCHours()).toBe(0);
       expect(gte.getUTCMinutes()).toBe(0);
+    });
+  });
+
+  describe('Recipes', () => {
+    function makeRecipe(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        id: 'recipe-1',
+        userId,
+        name: 'Bowl de Pollo',
+        description: null,
+        prepTimeMin: null,
+        difficulty: null,
+        isFavorite: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ingredients: [
+          { id: 'ing-1', recipeId: 'recipe-1', foodId: food.id, quantityG: 150, caloriesKcal: 247.5, proteinG: 46.5, carbsG: 0, fatG: 5.4 },
+        ],
+        ...overrides,
+      };
+    }
+
+    it('createRecipe calcula el snapshot de macros de cada ingrediente según servingSizeG', async () => {
+      prisma.food.findUnique.mockResolvedValue(food); // servingSizeG: 100
+      prisma.recipe.create.mockResolvedValue(makeRecipe());
+
+      await service.createRecipe(userId, {
+        name: 'Bowl de Pollo',
+        ingredients: [{ foodId: food.id, quantityG: 150 }],
+      });
+
+      expect(prisma.recipe.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId,
+            name: 'Bowl de Pollo',
+            ingredients: {
+              create: [
+                expect.objectContaining({
+                  foodId: food.id,
+                  quantityG: 150,
+                  caloriesKcal: 165 * 1.5,
+                  proteinG: 31 * 1.5,
+                  carbsG: 0,
+                  fatG: 3.6 * 1.5,
+                }),
+              ],
+            },
+          }),
+        }),
+      );
+    });
+
+    it('getRecipes suma los macros de los ingredientes en `totals`', async () => {
+      prisma.recipe.findMany.mockResolvedValue([makeRecipe()]);
+
+      const [result] = await service.getRecipes(userId);
+
+      expect(result.totals).toEqual({
+        caloriesKcal: 247.5,
+        proteinG: 46.5,
+        carbsG: 0,
+        fatG: 5.4,
+      });
+    });
+
+    it('getRecipeById lanza ForbiddenException si la receta pertenece a otro usuario', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(makeRecipe());
+
+      await expect(service.getRecipeById(otherUserId, 'recipe-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('duplicateRecipe copia los ingredientes con el nombre "(copia)"', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(makeRecipe());
+      prisma.recipe.create.mockResolvedValue(makeRecipe({ id: 'recipe-2', name: 'Bowl de Pollo (copia)' }));
+
+      await service.duplicateRecipe(userId, 'recipe-1');
+
+      expect(prisma.recipe.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId,
+            name: 'Bowl de Pollo (copia)',
+            ingredients: { create: [expect.objectContaining({ foodId: food.id, quantityG: 150 })] },
+          }),
+        }),
+      );
+    });
+
+    it('addRecipeToDiary crea una comida de hoy con los ingredientes de la receta', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(makeRecipe());
+      prisma.meal.create.mockResolvedValue({});
+
+      await service.addRecipeToDiary(userId, 'recipe-1', 'cena');
+
+      expect(prisma.meal.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId,
+            mealType: 'cena',
+            items: { create: [expect.objectContaining({ foodId: food.id, quantityG: 150 })] },
+          }),
+        }),
+      );
+    });
+
+    it('deleteRecipe lanza NotFoundException si no existe', async () => {
+      prisma.recipe.findUnique.mockResolvedValue(null);
+
+      await expect(service.deleteRecipe(userId, 'missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('duplicateMeal / createRecipeFromMeal (s01-context-menu adaptado)', () => {
+    function makeMealWithItems() {
+      return {
+        id: 'meal-1',
+        userId,
+        mealType: 'cena',
+        loggedAt: new Date(),
+        createdAt: new Date(),
+        items: [
+          { id: 'item-1', mealId: 'meal-1', foodId: food.id, quantityG: 150, caloriesKcal: 247.5, proteinG: 46.5, carbsG: 0, fatG: 5.4 },
+        ],
+      };
+    }
+
+    it('duplicateMeal clona los ítems como una comida nueva del mismo tipo', async () => {
+      prisma.meal.findUnique.mockResolvedValue(makeMealWithItems());
+      prisma.meal.create.mockResolvedValue({});
+
+      await service.duplicateMeal(userId, 'meal-1');
+
+      expect(prisma.meal.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId,
+            mealType: 'cena',
+            items: { create: [expect.objectContaining({ foodId: food.id, quantityG: 150 })] },
+          }),
+        }),
+      );
+    });
+
+    it('createRecipeFromMeal lanza ConflictException si la comida no tiene ítems', async () => {
+      prisma.meal.findUnique.mockResolvedValue({ ...makeMealWithItems(), items: [] });
+
+      await expect(service.createRecipeFromMeal(userId, 'meal-1', 'Mi receta')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('updateMealItemQuantity recalcula el snapshot con la nueva cantidad', async () => {
+      const meal = makeMealWithItems();
+      prisma.meal.findUnique.mockResolvedValue(meal);
+      prisma.food.findUnique.mockResolvedValue(food); // servingSizeG: 100
+      prisma.mealItem.update.mockResolvedValue({});
+
+      await service.updateMealItemQuantity(userId, 'meal-1', 'item-1', 200);
+
+      expect(prisma.mealItem.update).toHaveBeenCalledWith({
+        where: { id: 'item-1' },
+        data: expect.objectContaining({ quantityG: 200, caloriesKcal: 165 * 2 }),
+      });
+    });
+  });
+
+  describe('Meal schedule', () => {
+    it('upsertMealScheduleEntry usa la clave compuesta userId_mealType', async () => {
+      prisma.mealScheduleEntry.upsert.mockResolvedValue({});
+
+      await service.upsertMealScheduleEntry(userId, { mealType: 'desayuno', timeOfDay: '08:00' });
+
+      expect(prisma.mealScheduleEntry.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId_mealType: { userId, mealType: 'desayuno' } },
+        }),
+      );
     });
   });
 });
