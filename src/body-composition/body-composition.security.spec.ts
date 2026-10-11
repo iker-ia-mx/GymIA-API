@@ -25,7 +25,7 @@ describe('BodyCompositionService - photo upload authorization', () => {
 
   beforeEach(() => {
     create = vi.fn().mockResolvedValue({ id: 'photo-1', userId: ownerId });
-    list = vi.fn().mockResolvedValue({ data: [{ name: filename }], error: null });
+    list = vi.fn().mockResolvedValue({ data: [{ name: filename, metadata: { size: 1024, mimetype: 'image/jpeg' } }], error: null });
     findUnique = vi.fn().mockResolvedValue({ ...intent, expiresAt: new Date(Date.now() + 60_000) });
     updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const tx = { progressPhotoUploadIntent: { updateMany }, progressPhoto: { create } };
@@ -153,6 +153,35 @@ describe('BodyCompositionService - photo upload authorization', () => {
     await expect(service.createProgressPhoto(ownerId, {
       storagePath: photoPath,
     })).rejects.toThrow(NotFoundException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an image larger than 10 MiB', async () => {
+    list.mockResolvedValue({
+      data: [{ name: filename, metadata: { size: 10 * 1024 * 1024 + 1, mimetype: 'image/jpeg' } }],
+      error: null,
+    });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+      .rejects.toThrow(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects MIME mismatch even when the filename is .jpg', async () => {
+    list.mockResolvedValue({
+      data: [{ name: filename, metadata: { size: 1024, mimetype: 'application/octet-stream' } }],
+      error: null,
+    });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+      .rejects.toThrow(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing or zero-sized object metadata', async () => {
+    for (const metadata of [undefined, { size: 0, mimetype: 'image/jpeg' }]) {
+      list.mockResolvedValue({ data: [{ name: filename, metadata }], error: null });
+      await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+        .rejects.toThrow(ForbiddenException);
+    }
     expect(create).not.toHaveBeenCalled();
   });
 
