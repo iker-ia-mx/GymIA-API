@@ -19,6 +19,7 @@ model User {
   workoutSessions   WorkoutSession[]
   bodyMetrics       BodyMetric[]
   progressPhotos    ProgressPhoto[]
+  progressPhotoUploadIntents ProgressPhotoUploadIntent[]
   refreshTokens     RefreshToken[]
   foods             Food[]
   meals             Meal[]
@@ -186,6 +187,21 @@ model ProgressPhoto {
 
   @@index([userId])
   @@index([userId, takenAt])
+}
+
+// Server-issued, single-use authorization for uploading a private progress photo.
+model ProgressPhotoUploadIntent {
+  id          String    @id @default(uuid())
+  userId      String
+  storagePath String    @unique
+  contentType String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 // Catálogo de alimentos propio de cada usuario (no compartido entre usuarios,

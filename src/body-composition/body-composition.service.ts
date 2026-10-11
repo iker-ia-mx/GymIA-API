@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -77,8 +78,20 @@ export class BodyCompositionService {
     const extension = CONTENT_TYPE_EXTENSIONS[contentType];
     const storagePath = `${userId}/${randomUUID()}.${extension}`;
 
+    await this.prisma.progressPhotoUploadIntent.create({
+      data: {
+        userId,
+        storagePath,
+        contentType,
+        expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000),
+      },
+    });
+
     const { data, error } = await this.getStorageBucket().createSignedUploadUrl(storagePath);
     if (error || !data) {
+      await this.prisma.progressPhotoUploadIntent.deleteMany({
+        where: { userId, storagePath, consumedAt: null },
+      });
       throw new InternalServerErrorException('Could not create an upload URL');
     }
 
@@ -91,17 +104,94 @@ export class BodyCompositionService {
     };
   }
 
-  createProgressPhoto(userId: string, dto: CreateProgressPhotoDto) {
-    if (!dto.storagePath.startsWith(`${userId}/`)) {
+  async createProgressPhoto(userId: string, dto: CreateProgressPhotoDto) {
+    const prefix = `${userId}/`;
+    if (!dto.storagePath.startsWith(prefix)) {
       throw new ForbiddenException('This storage path does not belong to you');
     }
 
-    return this.prisma.progressPhoto.create({
-      data: {
-        userId,
-        storagePath: dto.storagePath,
-        ...(dto.takenAt ? { takenAt: new Date(dto.takenAt) } : {}),
-      },
+    const filename = dto.storagePath.slice(prefix.length);
+    // Match the UUID filenames issued by createUploadUrl, without subfolders.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png)$/i.test(filename)) {
+      throw new ForbiddenException('Invalid progress photo path');
+    }
+
+    const intent = await this.prisma.progressPhotoUploadIntent.findUnique({
+      where: { storagePath: dto.storagePath },
+    });
+    if (!intent || intent.userId !== userId || intent.consumedAt ||
+        intent.expiresAt <= new Date()) {
+      throw new ForbiddenException('Upload authorization is missing or expired');
+    }
+    if ((intent.contentType === 'image/jpeg' && !filename.endsWith('.jpg')) ||
+        (intent.contentType === 'image/png' && !filename.endsWith('.png'))) {
+      throw new ForbiddenException('Upload content type mismatch');
+    }
+    const { data: objects, error } = await this.getStorageBucket().list(userId, {
+      search: filename,
+      limit: 100,
+    });
+    if (error) {
+      throw new InternalServerErrorException('Could not verify the uploaded photo');
+    }
+    const object = objects?.find((entry) => entry.name === filename);
+    if (!object) {
+      throw new NotFoundException('Uploaded photo not found');
+    }
+
+    // Storage metadata is necessary but not proof that bytes are a valid image.
+    // Reject missing or inconsistent metadata rather than silently accepting it.
+    const metadata = object.metadata as Record<string, unknown> | undefined;
+    const size = metadata?.size;
+    const mimeType = metadata?.mimetype;
+    const MAX_PROGRESS_PHOTO_BYTES = 10 * 1024 * 1024;
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) ||
+        size <= 0 || size > MAX_PROGRESS_PHOTO_BYTES ||
+        mimeType !== intent.contentType) {
+      throw new ForbiddenException('Uploaded photo metadata is invalid');
+    }
+
+    // Inspect the actual bytes; Storage metadata alone can be forged.
+    // A magic signature is a lightweight check, not a complete image decoder.
+    const { data: imageBlob, error: downloadError } =
+      await this.getStorageBucket().download(dto.storagePath);
+    if (downloadError || !imageBlob) {
+      throw new InternalServerErrorException('Could not inspect uploaded photo');
+    }
+    if (imageBlob.size !== size || imageBlob.size > MAX_PROGRESS_PHOTO_BYTES) {
+      throw new ForbiddenException('Uploaded photo size mismatch');
+    }
+    const signature = new Uint8Array(await imageBlob.slice(0, 8).arrayBuffer());
+    const isJpeg = signature.length >= 3 &&
+      signature[0] === 0xff && signature[1] === 0xd8 && signature[2] === 0xff;
+    const isPng = signature.length >= 8 &&
+      [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => signature[index] === byte);
+    if ((intent.contentType === 'image/jpeg' && !isJpeg) ||
+        (intent.contentType === 'image/png' && !isPng)) {
+      throw new ForbiddenException('Uploaded file content is not a valid image signature');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.progressPhotoUploadIntent.updateMany({
+        where: {
+          id: intent.id,
+          userId,
+          consumedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { consumedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('Upload authorization already consumed');
+      }
+      return tx.progressPhoto.create({
+        data: {
+          userId,
+          storagePath: dto.storagePath,
+          contentType: intent.contentType,
+          ...(dto.takenAt ? { takenAt: new Date(dto.takenAt) } : {}),
+        },
+      });
     });
   }
 
