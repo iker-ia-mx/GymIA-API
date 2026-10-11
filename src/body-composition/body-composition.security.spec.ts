@@ -19,6 +19,7 @@ describe('BodyCompositionService - photo upload authorization', () => {
   };
   let create: ReturnType<typeof vi.fn>;
   let list: ReturnType<typeof vi.fn>;
+  let download: ReturnType<typeof vi.fn>;
   let findUnique: ReturnType<typeof vi.fn>;
   let updateMany: ReturnType<typeof vi.fn>;
   let service: BodyCompositionService;
@@ -26,6 +27,10 @@ describe('BodyCompositionService - photo upload authorization', () => {
   beforeEach(() => {
     create = vi.fn().mockResolvedValue({ id: 'photo-1', userId: ownerId });
     list = vi.fn().mockResolvedValue({ data: [{ name: filename, metadata: { size: 1024, mimetype: 'image/jpeg' } }], error: null });
+    download = vi.fn().mockResolvedValue({
+      data: new Blob([new Uint8Array([0xff, 0xd8, 0xff]), new Uint8Array(1021)]),
+      error: null,
+    });
     findUnique = vi.fn().mockResolvedValue({ ...intent, expiresAt: new Date(Date.now() + 60_000) });
     updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const tx = { progressPhotoUploadIntent: { updateMany }, progressPhoto: { create } };
@@ -36,7 +41,7 @@ describe('BodyCompositionService - photo upload authorization', () => {
     const config = { get: vi.fn(), getOrThrow: vi.fn() } as unknown as ConfigService;
     service = new BodyCompositionService(prisma, config);
     (service as unknown as { getStorageBucket: () => unknown }).getStorageBucket =
-      () => ({ list });
+      () => ({ list, download });
   });
 
   it('issues a signed upload URL only after persisting its authorization', async () => {
@@ -182,6 +187,31 @@ describe('BodyCompositionService - photo upload authorization', () => {
       await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
         .rejects.toThrow(ForbiddenException);
     }
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a file with JPEG metadata but non-JPEG bytes', async () => {
+    download.mockResolvedValue({
+      data: new Blob([new Uint8Array(1024)]), error: null,
+    });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+      .rejects.toThrow(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a binary file whose actual length differs from Storage metadata', async () => {
+    download.mockResolvedValue({
+      data: new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), error: null,
+    });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+      .rejects.toThrow(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if the image bytes cannot be downloaded', async () => {
+    download.mockResolvedValue({ data: null, error: { message: 'download denied' } });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: photoPath }))
+      .rejects.toThrow(InternalServerErrorException);
     expect(create).not.toHaveBeenCalled();
   });
 
