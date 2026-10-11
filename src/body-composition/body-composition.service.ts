@@ -91,9 +91,29 @@ export class BodyCompositionService {
     };
   }
 
-  createProgressPhoto(userId: string, dto: CreateProgressPhotoDto) {
-    if (!dto.storagePath.startsWith(`${userId}/`)) {
+  async createProgressPhoto(userId: string, dto: CreateProgressPhotoDto) {
+    const prefix = `${userId}/`;
+    if (!dto.storagePath.startsWith(prefix)) {
       throw new ForbiddenException('This storage path does not belong to you');
+    }
+
+    const filename = dto.storagePath.slice(prefix.length);
+    // Match the UUID filenames issued by createUploadUrl, without subfolders.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png)$/i.test(filename)) {
+      throw new ForbiddenException('Invalid progress photo path');
+    }
+
+    // This is a first defense only. A persistent, single-use upload intent
+    // is still required to prove that the API authorized this upload.
+    const { data: objects, error } = await this.getStorageBucket().list(userId, {
+      search: filename,
+      limit: 100,
+    });
+    if (error) {
+      throw new InternalServerErrorException('Could not verify the uploaded photo');
+    }
+    if (!objects?.some((object) => object.name === filename)) {
+      throw new NotFoundException('Uploaded photo not found');
     }
 
     return this.prisma.progressPhoto.create({
