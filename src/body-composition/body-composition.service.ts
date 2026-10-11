@@ -134,8 +134,21 @@ export class BodyCompositionService {
     if (error) {
       throw new InternalServerErrorException('Could not verify the uploaded photo');
     }
-    if (!objects?.some((object) => object.name === filename)) {
+    const object = objects?.find((entry) => entry.name === filename);
+    if (!object) {
       throw new NotFoundException('Uploaded photo not found');
+    }
+
+    // Storage metadata is necessary but not proof that bytes are a valid image.
+    // Reject missing or inconsistent metadata rather than silently accepting it.
+    const metadata = object.metadata as Record<string, unknown> | undefined;
+    const size = metadata?.size;
+    const mimeType = metadata?.mimetype;
+    const MAX_PROGRESS_PHOTO_BYTES = 10 * 1024 * 1024;
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) ||
+        size <= 0 || size > MAX_PROGRESS_PHOTO_BYTES ||
+        mimeType !== intent.contentType) {
+      throw new ForbiddenException('Uploaded photo metadata is invalid');
     }
 
     return this.prisma.$transaction(async (tx) => {
