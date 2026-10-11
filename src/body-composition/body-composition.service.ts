@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -77,8 +78,20 @@ export class BodyCompositionService {
     const extension = CONTENT_TYPE_EXTENSIONS[contentType];
     const storagePath = `${userId}/${randomUUID()}.${extension}`;
 
+    await this.prisma.progressPhotoUploadIntent.create({
+      data: {
+        userId,
+        storagePath,
+        contentType,
+        expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000),
+      },
+    });
+
     const { data, error } = await this.getStorageBucket().createSignedUploadUrl(storagePath);
     if (error || !data) {
+      await this.prisma.progressPhotoUploadIntent.deleteMany({
+        where: { userId, storagePath, consumedAt: null },
+      });
       throw new InternalServerErrorException('Could not create an upload URL');
     }
 
@@ -99,12 +112,21 @@ export class BodyCompositionService {
 
     const filename = dto.storagePath.slice(prefix.length);
     // Match the UUID filenames issued by createUploadUrl, without subfolders.
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png)$/i.test(filename)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png)$/i.test(filename)) {
       throw new ForbiddenException('Invalid progress photo path');
     }
 
-    // This is a first defense only. A persistent, single-use upload intent
-    // is still required to prove that the API authorized this upload.
+    const intent = await this.prisma.progressPhotoUploadIntent.findUnique({
+      where: { storagePath: dto.storagePath },
+    });
+    if (!intent || intent.userId !== userId || intent.consumedAt ||
+        intent.expiresAt <= new Date()) {
+      throw new ForbiddenException('Upload authorization is missing or expired');
+    }
+    if ((intent.contentType === 'image/jpeg' && !filename.endsWith('.jpg')) ||
+        (intent.contentType === 'image/png' && !filename.endsWith('.png'))) {
+      throw new ForbiddenException('Upload content type mismatch');
+    }
     const { data: objects, error } = await this.getStorageBucket().list(userId, {
       search: filename,
       limit: 100,
@@ -116,12 +138,27 @@ export class BodyCompositionService {
       throw new NotFoundException('Uploaded photo not found');
     }
 
-    return this.prisma.progressPhoto.create({
-      data: {
-        userId,
-        storagePath: dto.storagePath,
-        ...(dto.takenAt ? { takenAt: new Date(dto.takenAt) } : {}),
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.progressPhotoUploadIntent.updateMany({
+        where: {
+          id: intent.id,
+          userId,
+          consumedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { consumedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('Upload authorization already consumed');
+      }
+      return tx.progressPhoto.create({
+        data: {
+          userId,
+          storagePath: dto.storagePath,
+          contentType: intent.contentType,
+          ...(dto.takenAt ? { takenAt: new Date(dto.takenAt) } : {}),
+        },
+      });
     });
   }
 
