@@ -151,6 +151,26 @@ export class BodyCompositionService {
       throw new ForbiddenException('Uploaded photo metadata is invalid');
     }
 
+    // Inspect the actual bytes; Storage metadata alone can be forged.
+    // A magic signature is a lightweight check, not a complete image decoder.
+    const { data: imageBlob, error: downloadError } =
+      await this.getStorageBucket().download(dto.storagePath);
+    if (downloadError || !imageBlob) {
+      throw new InternalServerErrorException('Could not inspect uploaded photo');
+    }
+    if (imageBlob.size !== size || imageBlob.size > MAX_PROGRESS_PHOTO_BYTES) {
+      throw new ForbiddenException('Uploaded photo size mismatch');
+    }
+    const signature = new Uint8Array(await imageBlob.slice(0, 8).arrayBuffer());
+    const isJpeg = signature.length >= 3 &&
+      signature[0] === 0xff && signature[1] === 0xd8 && signature[2] === 0xff;
+    const isPng = signature.length >= 8 &&
+      [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => signature[index] === byte);
+    if ((intent.contentType === 'image/jpeg' && !isJpeg) ||
+        (intent.contentType === 'image/png' && !isPng)) {
+      throw new ForbiddenException('Uploaded file content is not a valid image signature');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const claimed = await tx.progressPhotoUploadIntent.updateMany({
         where: {
