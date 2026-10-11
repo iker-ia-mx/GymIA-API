@@ -190,6 +190,45 @@ describe('BodyCompositionService - photo upload authorization', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('accepts a PNG upload with matching intent, metadata and signature', async () => {
+    const pngFilename = '12345678-1234-1234-1234-123456789abc.png';
+    const pngPath = `${ownerId}/${pngFilename}`;
+    const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+    findUnique.mockResolvedValue({
+      ...intent, storagePath: pngPath, contentType: 'image/png',
+    });
+    list.mockResolvedValue({
+      data: [{ name: pngFilename, metadata: { size: 1024, mimetype: 'image/png' } }],
+      error: null,
+    });
+    download.mockResolvedValue({
+      data: new Blob([new Uint8Array(pngSignature), new Uint8Array(1016)]),
+      error: null,
+    });
+    await service.createProgressPhoto(ownerId, { storagePath: pngPath });
+    expect(create).toHaveBeenCalledWith({
+      data: { userId: ownerId, storagePath: pngPath, contentType: 'image/png' },
+    });
+  });
+
+  it('rejects a PNG whose signature is corrupted', async () => {
+    const pngFilename = '12345678-1234-1234-1234-123456789abc.png';
+    const pngPath = `${ownerId}/${pngFilename}`;
+    findUnique.mockResolvedValue({
+      ...intent, storagePath: pngPath, contentType: 'image/png',
+    });
+    list.mockResolvedValue({
+      data: [{ name: pngFilename, metadata: { size: 1024, mimetype: 'image/png' } }],
+      error: null,
+    });
+    download.mockResolvedValue({
+      data: new Blob([new Uint8Array(1024)]), error: null,
+    });
+    await expect(service.createProgressPhoto(ownerId, { storagePath: pngPath }))
+      .rejects.toThrow(ForbiddenException);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('rejects a file with JPEG metadata but non-JPEG bytes', async () => {
     download.mockResolvedValue({
       data: new Blob([new Uint8Array(1024)]), error: null,
